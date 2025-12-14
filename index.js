@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const admin = require("firebase-admin");
 const port = process.env.PORT || 3000;
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
@@ -61,6 +61,19 @@ async function run() {
       const ticketData = req.body;
       console.log(ticketData);
       const result = await ticketCollection.insertOne(ticketData);
+      res.send(result);
+    });
+
+    //get ticket data from db
+    app.get("/tickets", async (req, res) => {
+      const result = await ticketCollection.find().toArray();
+      res.send(result);
+    });
+
+    //get ticket data from db
+    app.get("/tickets/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await ticketCollection.findOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
