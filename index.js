@@ -2,6 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const admin = require("firebase-admin");
 const port = process.env.PORT || 3000;
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
@@ -16,11 +17,7 @@ const app = express();
 // middleware
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "https://b12-m11-session.web.app",
-    ],
+    origin: [process.env.CLIENT_DOMAIN],
     credentials: true,
     optionSuccessStatus: 200,
   })
@@ -55,6 +52,7 @@ async function run() {
   try {
     const db = client.db("ticketDB");
     const ticketCollection = db.collection("tickets");
+    const ordersCollection = db.collection("orders");
 
     //Save ticket data in db
     app.post("/tickets", async (req, res) => {
@@ -75,6 +73,83 @@ async function run() {
       const id = req.params.id;
       const result = await ticketCollection.findOne({ _id: new ObjectId(id) });
       res.send(result);
+    });
+
+    // Payment Endpoints
+    app.post("/create-checkout-session", async (req, res) => {
+      const paymentInfo = req.body;
+      console.log(paymentInfo);
+
+      const session = await stripe.checkout.sessions.create({
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: {
+                name: paymentInfo?.name,
+                description: paymentInfo?.description,
+                images: [paymentInfo?.image],
+              },
+              unit_amount: paymentInfo?.price * 100,
+            },
+            quantity: paymentInfo?.quantity,
+          },
+        ],
+        customer_email: paymentInfo?.customer?.email,
+
+        mode: "payment",
+        metadata: {
+          ticketId: paymentInfo?.ticketId,
+          customer: paymentInfo?.customer.email,
+        },
+        success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.CLIENT_DOMAIN}/plant/${paymentInfo?.ticketId}`,
+      });
+      res.send({ url: session.url });
+    });
+
+    app.post("/payment-success", async (req, res) => {
+      const { sessionId } = req.body;
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      const ticket = await ticketCollection.findOne({
+        _id: new ObjectId(session.metadata.ticketId),
+      });
+      const order = await ordersCollection.findOne({
+        transactionId: session.payment_intent,
+      });
+
+      if (session.status === "complete" && ticket && !order) {
+        //save order data in db
+        const orderInfo = {
+          ticketId: session.metadata.ticketId,
+          transactionId: session.payment_intent,
+          customer: session.metadata.customer,
+          status: "pending",
+          seller: ticket?.seller,
+          name: ticket?.name,
+          category: ticket?.category,
+          quantity: 1,
+          price: session.amount_total / 100,
+          description: ticket?.description,
+          image: ticket?.image,
+        };
+        const result = await ordersCollection.insertOne(orderInfo);
+        //  update ticket quantity
+        await ticketCollection.updateOne(
+          { _id: new ObjectId(session.metadata.ticketId) },
+          { $inc: { quantity: -1 } }
+        );
+        return res.send({
+          transactionId: session.payment_intent,
+          orderId: result.insertedId,
+        });
+      }
+      res.send(
+        res.send({
+          transactionId: session.payment_intent,
+          orderId: order._id,
+        })
+      );
     });
 
     // Send a ping to confirm a successful connection
