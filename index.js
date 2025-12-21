@@ -152,6 +152,47 @@ async function run() {
       );
     });
 
+    // get all orders for a customer by email
+    app.get("/my-orders/:email", async (req, res) => {
+      const email = req.params.email;
+      const result = await ordersCollection.find({ customer: email }).toArray();
+      res.send(result);
+    });
+    // get all orders for a seller by email
+    app.get("/manage-orders/:email", async (req, res) => {
+      const email = req.params.email;
+      const result = await ordersCollection
+        .find({ "seller.email": email })
+        .toArray();
+      res.send(result);
+    });
+    // get all tickets for a seller by email
+    app.get("/my-inventory/:email", async (req, res) => {
+      const email = req.params.email;
+      const result = await ticketCollection
+        .find({ "seller.email": email })
+        .toArray();
+      res.send(result);
+    });
+
+    // Delete order by id
+    app.delete("/orders/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await ordersCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
+    // Delete ticket by id
+    app.delete("/tickets/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await ticketCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
