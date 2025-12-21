@@ -53,6 +53,7 @@ async function run() {
     const db = client.db("ticketDB");
     const ticketCollection = db.collection("tickets");
     const ordersCollection = db.collection("orders");
+    const usersCollection = db.collection("users");
 
     //Save ticket data in db
     app.post("/tickets", async (req, res) => {
@@ -191,6 +192,13 @@ async function run() {
         _id: new ObjectId(id),
       });
       res.send(result);
+    });
+
+    // save or update a user in db
+    app.post("/user", async (req, res) => {
+      const userData = req.body;
+      const result = await usersCollection.insertOne(userData);
+      res.send(userData);
     });
 
     // Send a ping to confirm a successful connection
