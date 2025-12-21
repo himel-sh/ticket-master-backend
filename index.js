@@ -197,8 +197,29 @@ async function run() {
     // save or update a user in db
     app.post("/user", async (req, res) => {
       const userData = req.body;
+
+      userData.created_at = new Date().toISOString();
+      userData.last_loggedin = new Date().toISOString();
+
+      const query = {
+        email: userData.email,
+      };
+
+      const alreadyExists = await usersCollection.findOne({
+        email: userData.email,
+      });
+      console.log("User Already Exists--->", !!alreadyExists);
+      if (alreadyExists) {
+        console.log("updating user info");
+        const result = await usersCollection.updateOne(query, {
+          $set: { last_loggedin: new Date().toISOString() },
+        });
+        return res.send(result);
+      }
+
+      console.log("saving new user info");
       const result = await usersCollection.insertOne(userData);
-      res.send(userData);
+      res.send(result);
     });
 
     // Send a ping to confirm a successful connection
