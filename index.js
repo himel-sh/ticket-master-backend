@@ -17,7 +17,7 @@ const app = express();
 // middleware
 app.use(
   cors({
-    origin: [process.env.CLIENT_DOMAIN],
+    origin: [process.env.CLIENT_DOMAIN, process.env.LOCAL_DOMAIN],
     credentials: true,
     optionSuccessStatus: 200,
   })
@@ -111,24 +111,27 @@ async function run() {
             price_data: {
               currency: "usd",
               product_data: {
-                name: paymentInfo?.name,
+                name: paymentInfo?.ticketName || paymentInfo?.name,
                 description: paymentInfo?.description,
                 images: [paymentInfo?.image],
               },
-              unit_amount: paymentInfo?.price * 100,
+              unit_amount:
+                (paymentInfo?.price ||
+                  paymentInfo?.totalPrice / paymentInfo?.quantity) * 100,
             },
-            quantity: paymentInfo?.quantity,
+            quantity: paymentInfo?.quantity || 1,
           },
         ],
         customer_email: paymentInfo?.customer?.email,
 
         mode: "payment",
         metadata: {
+          orderId: paymentInfo?.orderId,
           ticketId: paymentInfo?.ticketId,
           customer: paymentInfo?.customer.email,
         },
         success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.CLIENT_DOMAIN}/plant/${paymentInfo?.ticketId}`,
+        cancel_url: `${process.env.CLIENT_DOMAIN}/dashboard/my-orders`,
       });
       res.send({ url: session.url });
     });
@@ -136,45 +139,80 @@ async function run() {
     app.post("/payment-success", async (req, res) => {
       const { sessionId } = req.body;
       const session = await stripe.checkout.sessions.retrieve(sessionId);
-      const ticket = await ticketCollection.findOne({
-        _id: new ObjectId(session.metadata.ticketId),
-      });
-      const order = await ordersCollection.findOne({
-        transactionId: session.payment_intent,
-      });
 
-      if (session.status === "complete" && ticket && !order) {
-        //save order data in db
-        const orderInfo = {
-          ticketId: session.metadata.ticketId,
-          transactionId: session.payment_intent,
-          customer: session.metadata.customer,
-          status: "pending",
-          seller: ticket?.seller,
-          name: ticket?.name,
-          category: ticket?.category,
-          quantity: 1,
-          price: session.amount_total / 100,
-          description: ticket?.description,
-          image: ticket?.image,
-        };
-        const result = await ordersCollection.insertOne(orderInfo);
-        //  update ticket quantity
-        await ticketCollection.updateOne(
-          { _id: new ObjectId(session.metadata.ticketId) },
-          { $inc: { quantity: -1 } }
-        );
-        return res.send({
-          transactionId: session.payment_intent,
-          orderId: result.insertedId,
+      // Handle order payment (from My Orders)
+      if (session.metadata.orderId) {
+        const order = await ordersCollection.findOne({
+          _id: new ObjectId(session.metadata.orderId),
         });
+
+        if (session.status === "complete" && order) {
+          // Update order status to paid
+          const result = await ordersCollection.updateOne(
+            { _id: new ObjectId(session.metadata.orderId) },
+            { $set: { status: "paid", transactionId: session.payment_intent } }
+          );
+
+          // Update ticket quantity
+          const ticket = await ticketCollection.findOne({
+            _id: new ObjectId(order.ticketId),
+          });
+
+          if (ticket) {
+            await ticketCollection.updateOne(
+              { _id: new ObjectId(order.ticketId) },
+              { $inc: { quantity: -order.quantity } }
+            );
+          }
+
+          return res.send({
+            transactionId: session.payment_intent,
+            orderId: session.metadata.orderId,
+          });
+        }
       }
-      res.send(
-        res.send({
+
+      // Handle direct ticket purchase (from Ticket Details)
+      if (session.metadata.ticketId) {
+        const ticket = await ticketCollection.findOne({
+          _id: new ObjectId(session.metadata.ticketId),
+        });
+        const order = await ordersCollection.findOne({
           transactionId: session.payment_intent,
-          orderId: order._id,
-        })
-      );
+        });
+
+        if (session.status === "complete" && ticket && !order) {
+          //save order data in db
+          const orderInfo = {
+            ticketId: session.metadata.ticketId,
+            transactionId: session.payment_intent,
+            customer: session.metadata.customer,
+            status: "paid",
+            seller: ticket?.seller,
+            name: ticket?.name,
+            category: ticket?.category,
+            quantity: 1,
+            price: session.amount_total / 100,
+            description: ticket?.description,
+            image: ticket?.image,
+          };
+          const result = await ordersCollection.insertOne(orderInfo);
+          //  update ticket quantity
+          await ticketCollection.updateOne(
+            { _id: new ObjectId(session.metadata.ticketId) },
+            { $inc: { quantity: -1 } }
+          );
+          return res.send({
+            transactionId: session.payment_intent,
+            orderId: result.insertedId,
+          });
+        }
+      }
+
+      res.send({
+        transactionId: session.payment_intent,
+        orderId: null,
+      });
     });
 
     // get all orders for a customer by email
@@ -211,6 +249,17 @@ async function run() {
       }
     );
 
+    // Create a new booking/order
+    app.post("/orders", async (req, res) => {
+      const orderData = req.body;
+      try {
+        const result = await ordersCollection.insertOne(orderData);
+        res.status(201).send(result);
+      } catch (error) {
+        res.status(400).send({ message: "Failed to create booking", error });
+      }
+    });
+
     // Delete order by id
     app.delete("/orders/:id", async (req, res) => {
       const id = req.params.id;
@@ -226,6 +275,32 @@ async function run() {
       const result = await ticketCollection.deleteOne({
         _id: new ObjectId(id),
       });
+      res.send(result);
+    });
+
+    // Update ticket by id
+    app.patch("/tickets/:id", async (req, res) => {
+      const id = req.params.id;
+      const ticketData = req.body;
+      try {
+        const result = await ticketCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: ticketData }
+        );
+        res.send(result);
+      } catch (error) {
+        res.status(400).send({ message: "Failed to update ticket", error });
+      }
+    });
+
+    // Update order status by id
+    app.patch("/orders/:id", async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body;
+      const result = await ordersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status } }
+      );
       res.send(result);
     });
 
