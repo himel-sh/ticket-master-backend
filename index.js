@@ -54,6 +54,7 @@ async function run() {
     const ticketCollection = db.collection("tickets");
     const ordersCollection = db.collection("orders");
     const usersCollection = db.collection("users");
+    const sellerRequestsCollection = db.collection("sellerRequests");
 
     //Save ticket data in db
     app.post("/tickets", async (req, res) => {
@@ -154,9 +155,10 @@ async function run() {
     });
 
     // get all orders for a customer by email
-    app.get("/my-orders/:email", async (req, res) => {
-      const email = req.params.email;
-      const result = await ordersCollection.find({ customer: email }).toArray();
+    app.get("/my-orders", verifyJWT, async (req, res) => {
+      const result = await ordersCollection
+        .find({ customer: req.tokenEmail })
+        .toArray();
       res.send(result);
     });
     // get all orders for a seller by email
@@ -200,6 +202,7 @@ async function run() {
 
       userData.created_at = new Date().toISOString();
       userData.last_loggedin = new Date().toISOString();
+      userData.role = "customer";
 
       const query = {
         email: userData.email,
@@ -219,6 +222,52 @@ async function run() {
 
       console.log("saving new user info");
       const result = await usersCollection.insertOne(userData);
+      res.send(result);
+    });
+
+    // get a users role
+
+    app.get("/user/role", verifyJWT, async (req, res) => {
+      const result = await usersCollection.findOne({ email: req.tokenEmail });
+      res.send({ role: result?.role });
+    });
+
+    // save become-seller request
+    app.post("/become-seller", verifyJWT, async (req, res) => {
+      const email = req.tokenEmail;
+      const alreadyExists = await sellerRequestsCollection.findOne({
+        email,
+      });
+      if (alreadyExists)
+        return res
+          .status(409)
+          .send({ message: "Already Requested , please wait for approval" });
+      const result = await sellerRequestsCollection.insertOne({ email });
+      res.send(result);
+    });
+
+    // get all seller requests for admin
+    app.get("/seller-requests", verifyJWT, async (req, res) => {
+      const result = await sellerRequestsCollection.find().toArray();
+      res.send(result);
+    });
+    // get all users requests for admin
+    app.get("/users", verifyJWT, async (req, res) => {
+      const adminEmail = req.tokenEmail;
+      const result = await usersCollection
+        .find({ email: { $ne: adminEmail } })
+        .toArray();
+      res.send(result);
+    });
+
+    //update a users role
+    app.patch("/update-role", verifyJWT, async (req, res) => {
+      const { email, role } = req.body;
+      const result = await usersCollection.updateOne(
+        { email },
+        { $set: { role } }
+      );
+      await sellerRequestsCollection.deleteOne({ email });
       res.send(result);
     });
 
