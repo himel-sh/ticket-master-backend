@@ -82,14 +82,28 @@ async function run() {
     //Save ticket data in db
     app.post("/tickets", verifyJWT, verifySELLER, async (req, res) => {
       const ticketData = req.body;
+      ticketData.status = "pending"; // Set status to pending by default
       console.log(ticketData);
       const result = await ticketCollection.insertOne(ticketData);
       res.send(result);
     });
 
-    //get ticket data from db
+    //get approved ticket data from db (for public display)
     app.get("/tickets", async (req, res) => {
-      const result = await ticketCollection.find().toArray();
+      const limit = req.query.limit ? parseInt(req.query.limit) : 0;
+      const result = await ticketCollection
+        .find({ status: "approved" })
+        .sort({ _id: -1 })
+        .limit(limit)
+        .toArray();
+      res.send(result);
+    });
+
+    //get advertised tickets for homepage
+    app.get("/advertised-tickets", async (req, res) => {
+      const result = await ticketCollection
+        .find({ status: "approved", isAdvertised: true })
+        .toArray();
       res.send(result);
     });
 
@@ -97,6 +111,20 @@ async function run() {
     app.get("/tickets/:id", async (req, res) => {
       const id = req.params.id;
       const result = await ticketCollection.findOne({ _id: new ObjectId(id) });
+      res.send(result);
+    });
+
+    //get all tickets for admin (including pending/rejected)
+    app.get("/all-tickets", verifyJWT, verifyADMIN, async (req, res) => {
+      const result = await ticketCollection.find().toArray();
+      res.send(result);
+    });
+
+    //get approved tickets for advertising
+    app.get("/approved-tickets", verifyJWT, verifyADMIN, async (req, res) => {
+      const result = await ticketCollection
+        .find({ status: "approved" })
+        .toArray();
       res.send(result);
     });
 
