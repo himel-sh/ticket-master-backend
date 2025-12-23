@@ -407,6 +407,171 @@ async function run() {
       res.send(result);
     });
 
+    // Get seller statistics
+    app.get(
+      "/seller-statistics/:email",
+      verifyJWT,
+      verifySELLER,
+      async (req, res) => {
+        const email = req.params.email;
+
+        try {
+          // Get all tickets added by seller
+          const allTickets = await ticketCollection
+            .find({ "seller.email": email })
+            .toArray();
+
+          // Get all paid orders for seller
+          const paidOrders = await ordersCollection
+            .find({ "seller.email": email, status: "paid" })
+            .toArray();
+
+          // Calculate statistics
+          const totalTicketsAdded = allTickets.length;
+          const totalTicketsSold = paidOrders.reduce(
+            (sum, order) => sum + order.quantity,
+            0
+          );
+          const totalRevenue = paidOrders.reduce(
+            (sum, order) => sum + order.price,
+            0
+          );
+
+          res.send({
+            totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+            totalTicketsSold,
+            totalTicketsAdded,
+            recentOrders: paidOrders.slice(-10), // Last 10 orders
+          });
+        } catch (error) {
+          res
+            .status(400)
+            .send({ message: "Failed to fetch statistics", error });
+        }
+      }
+    );
+
+    // Get admin statistics
+    app.get("/admin-statistics", verifyJWT, verifyADMIN, async (req, res) => {
+      try {
+        // Get all tickets
+        const allTickets = await ticketCollection.find().toArray();
+
+        // Get all paid orders
+        const allPaidOrders = await ordersCollection
+          .find({ status: "paid" })
+          .toArray();
+
+        // Get all users
+        const allUsers = await usersCollection.find().toArray();
+
+        // Calculate statistics
+        const totalTickets = allTickets.length;
+        const totalOrders = allPaidOrders.length;
+        const totalRevenue = allPaidOrders.reduce(
+          (sum, order) => sum + order.price,
+          0
+        );
+        const totalUsers = allUsers.length;
+
+        // Get revenue by seller
+        const revenueBySellerMap = {};
+        allPaidOrders.forEach((order) => {
+          const sellerEmail = order.seller?.email;
+          if (sellerEmail) {
+            revenueBySellerMap[sellerEmail] =
+              (revenueBySellerMap[sellerEmail] || 0) + order.price;
+          }
+        });
+
+        const revenueBySellerArray = Object.entries(revenueBySellerMap).map(
+          ([email, revenue]) => ({
+            email,
+            revenue: parseFloat(revenue.toFixed(2)),
+          })
+        );
+
+        res.send({
+          totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+          totalOrders,
+          totalTickets,
+          totalUsers,
+          recentOrders: allPaidOrders.slice(-10),
+          revenueBySellerArray,
+        });
+      } catch (error) {
+        res.status(400).send({ message: "Failed to fetch statistics", error });
+      }
+    });
+
+    // Get customer statistics
+    app.get("/customer-statistics/:email", verifyJWT, async (req, res) => {
+      const email = req.params.email;
+
+      try {
+        // Get all orders for customer
+        const customerOrders = await ordersCollection
+          .find({ customer: email })
+          .toArray();
+
+        // Get paid orders only
+        const paidOrders = customerOrders.filter(
+          (order) => order.status === "paid"
+        );
+
+        // Calculate statistics
+        const totalTicketsBought = paidOrders.reduce(
+          (sum, order) => sum + order.quantity,
+          0
+        );
+        const totalSpent = paidOrders.reduce(
+          (sum, order) => sum + order.price,
+          0
+        );
+        const totalOrders = paidOrders.length;
+
+        // Get spending by route
+        const spendingByRouteMap = {};
+        paidOrders.forEach((order) => {
+          const route = `${order.name}`;
+          spendingByRouteMap[route] =
+            (spendingByRouteMap[route] || 0) + order.price;
+        });
+
+        const spendingByRouteArray = Object.entries(spendingByRouteMap).map(
+          ([route, amount]) => ({
+            route,
+            amount: parseFloat(amount.toFixed(2)),
+          })
+        );
+
+        // Get spending by status
+        const statusBreakdown = {
+          paid: paidOrders.length,
+          pending: customerOrders.filter((o) => o.status === "pending").length,
+          approved: customerOrders.filter((o) => o.status === "approved")
+            .length,
+          rejected: customerOrders.filter((o) => o.status === "rejected")
+            .length,
+        };
+
+        res.send({
+          totalTicketsBought,
+          totalSpent: parseFloat(totalSpent.toFixed(2)),
+          totalOrders,
+          averageSpentPerOrder:
+            totalOrders > 0
+              ? parseFloat((totalSpent / totalOrders).toFixed(2))
+              : 0,
+          recentOrders: paidOrders.slice(-10),
+          spendingByRouteArray,
+          statusBreakdown,
+        });
+      } catch (error) {
+        res.status(400).send({ message: "Failed to fetch statistics", error });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
